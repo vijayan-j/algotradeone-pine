@@ -1,20 +1,21 @@
 //@version=6
 // =============================================================================
-//  VijiSignals — confluence leg primitives extracted from ATO Signal Engine
-//  v3.2. The four export bodies are byte-faithful to the indicator's formulas so
+//  AlgoTradeOneSignals — confluence leg primitives extracted from the
+//  AlgoTradeOne Signal Engine. The four export bodies are byte-faithful to the
+//  indicator's formulas so
 //  a future backtest strategy twin can share ONE implementation of the legs.
 //
 //  IMPORTANT
-//    The live indicator (indicators/ato-signal-engine.pine) stays
+//    The live indicator (indicators/algotradeone-signal-engine.pine) stays
 //    self-contained on purpose — it must compile on TradingView without any
 //    published dependency. This library is for the strategy twin, not the live
 //    script. To use it you must publish it (even privately) on TradingView and
 //    import by version:
-//        import <your_tv_user>/VijiSignals/1 as viji
+//        import <your_tv_user>/AlgoTradeOneSignals/1 as ato
 //    Every edit means republish + version bump + update the import. That friction
 //    is why the legs are duplicated in the monolith rather than imported there.
 // =============================================================================
-library("VijiSignals", overlay = true)
+library("AlgoTradeOneSignals", overlay = true)
 
 // @function UT Bot ATR trailing stop (classic recursive stop).
 // @param src      Source series (indicator uses close).

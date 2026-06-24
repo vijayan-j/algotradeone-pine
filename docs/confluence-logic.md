@@ -1,6 +1,6 @@
-# Confluence Logic — ATO Signal Engine v3.2
+# Confluence Logic — AlgoTradeOne Signal Engine
 
-Reference spec for `indicators/ato-signal-engine.pine`. This documents what
+Reference spec for `indicators/algotradeone-signal-engine.pine`. This documents what
 the live indicator actually does — not an aspiration.
 
 ## Core rule
@@ -25,7 +25,7 @@ turning it off cleanly collapses the system to a 3-leg confluence.
 | **LinReg** | `ta.linreg(close, len)` vs SMA/EMA signal | reg `11`, sig `7`, SMA on | `lrClose > lrSignal` |
 | **VWAP** | manual cumulative, anchor-reset | anchor `Session`, standard polarity | `close > vwap` |
 
-Extracted faithfully into `libraries/VijiSignals.pine` for the strategy twin.
+Extracted faithfully into `libraries/AlgoTradeOneSignals.pine` for the strategy twin.
 
 ## Signal behaviour — run → at most one entry
 
@@ -74,7 +74,7 @@ distance).
 
 ## Backtest parity
 
-`strategies/ato-signal-engine.pine` (not yet built) must replicate this whole
-model — not just the legs. The legs come from `VijiSignals.pine`; the entry latch,
+`strategies/algotradeone-signal-engine.pine` (not yet built) must replicate this whole
+model — not just the legs. The legs come from `AlgoTradeOneSignals.pine`; the entry latch,
 flat-only gate, and exit engine must be ported so the historical test validates
 the live signal rather than a re-implementation.

@@ -3,8 +3,8 @@
 ## File header
 - First line: `//@version=6`.
 - One declaration per file: `indicator()`, `strategy()`, or `library()`.
-- Title prefix ties related files together, e.g. `ATO Signal Engine` /
-  `ATO Signal Engine [S]` for the strategy twin.
+- Title prefix ties related files together, e.g. `AlgoTradeOne Signal Engine` /
+  `AlgoTradeOne Signal Engine [S]` for the strategy twin.
 
 ## Naming
 - `camelCase` — variables, functions, inputs (`atrLength`, `longSignal`).

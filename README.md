@@ -1,4 +1,4 @@
-# Pine Trading Lab
+# AlgoTradeOne Pine
 
 TradingView **Pine Script v6** indicators & strategies for NSE intraday/positional
 trading. Signal generation lives here; execution lives on the server
@@ -7,7 +7,7 @@ trading. Signal generation lives here; execution lives on the server
 ## Layout
 
 ```
-pine-trading-lab/
+algotradeone-pine/
 ├── CLAUDE.md              # Project rules — auto-read by Claude Code / Cowork
 ├── README.md
 ├── .gitignore

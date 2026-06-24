@@ -1,6 +1,6 @@
 //@version=6
 // ============================================================================
-//  ATO SIGNAL ENGINE — 4-LEG CONFLUENCE — v3.2                   Pine Script v6
+//  ALGOTRADEONE SIGNAL ENGINE — 4-LEG CONFLUENCE                 Pine Script v6
 // ----------------------------------------------------------------------------
 //  Signal indicator for NSE cash / F&O. Emits non-repainting BUY / SELL / EXIT
 //  events as Style-tab markers and as JSON webhooks for a downstream execution
@@ -25,21 +25,6 @@
 //    and risk). Only LONG_ENTRY / SHORT_ENTRY / LONG_EXIT / SHORT_EXIT are
 //    actionable; TREND_CHANGE is informational (transaction_type = "NONE").
 //
-//  v3.2 CHANGES (vs v3.1)
-//    REMOVED Instrument Preset and the Webhook input section. ALL execution
-//            parameters (quantity, order type, product type, exchange routing)
-//            are owned by the server / relay, so the payload is now a minimal
-//            signal event - no execution fields are passed through it.
-//    FIX     dashboard Entry/Stop - the last entry price + side are now tracked
-//            independently of the exit engine, so the Entry row is populated in
-//            every mode instead of reading empty while flat.
-//    NEW     session-filter sanity guard (warns when Allow-mode windows do not
-//            overlap trading hours -> would block every entry).
-//    UI      every signal marker (BUY / SELL / exits / sideways) is now a
-//            plotshape, so colour + visibility live in the STYLE tab. The Inputs
-//            tab holds only functional fields; background-shading colours are
-//            fixed in code because bgcolor() has no Style-tab hook.
-//
 //  QUICK SETUP
 //    1. Add to chart. Line / marker colours & visibility -> Settings > Style.
 //    2. Intraday? Enable Inputs > Intraday Square-off; the window FROM time is
@@ -48,7 +33,7 @@
 //       at your relay webhook. The relay owns exchange routing & order sizing.
 // ============================================================================
 
-indicator("ATO Signal Engine — 4-Leg Confluence v3.2", overlay = true, max_labels_count = 500)
+indicator("AlgoTradeOne Signal Engine — 4-Leg Confluence", overlay = true, max_labels_count = 500)
 
 // IST is the single source of truth for all session / time-window math.
 tz = "Asia/Kolkata"
