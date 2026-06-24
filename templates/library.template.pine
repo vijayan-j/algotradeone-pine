@@ -1,0 +1,15 @@
+//@version=6
+// =============================================================================
+//  <LibName> — reusable Pine primitives.
+//  Import:  import <your_tv_user>/<LibName>/1 as alias
+// =============================================================================
+library("TemplateLib", overlay=true)
+
+// @function One-line description of what this computes.
+// @param src Source series.
+// @param len Lookback length.
+// @returns [value, signal]
+export myPrimitive(series float src, simple int len) =>
+    value  = ta.sma(src, len)
+    signal = ta.crossover(src, value)
+    [value, signal]

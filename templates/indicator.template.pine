@@ -1,0 +1,56 @@
+//@version=6
+// =============================================================================
+//  <NAME> — Indicator (signal source)
+//  Emits JSON webhook intent on bar close. NO sizing / orders (server owns that).
+//  Twin strategy: strategies/<name>.pine  — keep signal logic identical.
+// =============================================================================
+indicator(title="Template Indicator", shorttitle="TPL", overlay=true,
+     max_labels_count=200)
+
+// IST is the single source of truth for session / time-window math.
+tz = "Asia/Kolkata"
+
+// ── Inputs ───────────────────────────────────────────────────────────────────
+src      = input.source(close, "Source", group="Signal")
+fastLen  = input.int(9,  "Fast Length", minval=1, group="Signal", inline="ema")
+slowLen  = input.int(21, "Slow Length", minval=1, group="Signal", inline="ema")
+
+// ── Calculations ─────────────────────────────────────────────────────────────
+fast = ta.ema(src, fastLen)
+slow = ta.ema(src, slowLen)
+
+// ── Signal logic (replace with confluence — see docs/confluence-logic.md) ─────
+triggerLong  = ta.crossover(fast, slow)
+triggerShort = ta.crossunder(fast, slow)
+
+// Gate examples — swap for Supertrend / LinReg / AVWAP gates:
+gateLong  = close > slow
+gateShort = close < slow
+
+longSignal  = triggerLong  and gateLong
+shortSignal = triggerShort and gateShort
+
+// ── Plots / visuals ──────────────────────────────────────────────────────────
+plot(fast, "Fast", color.new(color.teal,   0))
+plot(slow, "Slow", color.new(color.orange, 0))
+plotshape(longSignal,  "Long",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size=size.small)
+plotshape(shortSignal, "Short", shape.triangledown, location.abovebar, color.new(color.red,   0), size=size.small)
+
+// ── Alerts (minimal signal event — see docs/webhook-contract.md) ─────────────
+// Relay owns qty / order type / product / routing / risk. Payload is intent only.
+ts = str.format_time(time, "yyyy-MM-dd HH:mm", tz)
+f_payload(string _event, string _side) =>
+    sid = syminfo.ticker + "-" + timeframe.period + "-" + str.tostring(time)
+    '{"event":"' + _event + '"' +
+       ',"signal_id":"' + sid + '"' +
+       ',"transaction_type":"' + _side + '"' +
+       ',"symbol":"' + syminfo.ticker + '"' +
+       ',"price":' + str.tostring(close, format.mintick) +
+       ',"interval":"' + timeframe.period + '"' +
+       ',"time":"' + ts + '"}'
+
+if longSignal
+    alert(f_payload("LONG_ENTRY",  "BUY"),  alert.freq_once_per_bar_close)
+if shortSignal
+    alert(f_payload("SHORT_ENTRY", "SELL"), alert.freq_once_per_bar_close)
+// Add LONG_EXIT / SHORT_EXIT branches once an exit engine is wired in.

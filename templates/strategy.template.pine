@@ -1,0 +1,68 @@
+//@version=6
+// =============================================================================
+//  <NAME> [S] — Strategy (backtest twin)
+//  Validates the indicator's signal logic on history. Sizing + circuit breaker
+//  are SIMULATED here for testing only — this is NOT the live execution path.
+// =============================================================================
+strategy(title="Template Strategy", shorttitle="TPL-S", overlay=true,
+     initial_capital=100000,
+     commission_type=strategy.commission.percent, commission_value=0.03,
+     slippage=2, process_orders_on_close=true, calc_on_every_tick=false,
+     max_labels_count=200)
+
+// ── Inputs (signal — MUST mirror the indicator) ──────────────────────────────
+src     = input.source(close, "Source", group="Signal")
+fastLen = input.int(9,  "Fast Length", minval=1, group="Signal", inline="ema")
+slowLen = input.int(21, "Slow Length", minval=1, group="Signal", inline="ema")
+
+// ── Inputs (risk — simulation only) ──────────────────────────────────────────
+riskFracPct     = input.float(1.0, "Risk per trade %", minval=0.1, step=0.1, group="Risk")
+stopPct         = input.float(0.5, "Stop distance %",  minval=0.1, step=0.1, group="Risk")
+maxDailyLossPct = input.float(2.0, "Max daily loss %", minval=0.1, step=0.1, group="Risk")
+
+// ── Calculations ─────────────────────────────────────────────────────────────
+fast = ta.ema(src, fastLen)
+slow = ta.ema(src, slowLen)
+
+// ── Signal logic (identical to indicator) ────────────────────────────────────
+triggerLong  = ta.crossover(fast, slow)
+triggerShort = ta.crossunder(fast, slow)
+gateLong  = close > slow
+gateShort = close < slow
+longSignal  = triggerLong  and gateLong
+shortSignal = triggerShort and gateShort
+
+// ── Daily-loss circuit breaker ───────────────────────────────────────────────
+var float dayStartEquity = na
+if ta.change(time("D")) != 0
+    dayStartEquity := strategy.equity
+dailyPnLPct   = na(dayStartEquity) ? 0.0 : (strategy.equity - dayStartEquity) / dayStartEquity * 100.0
+tradingHalted = dailyPnLPct <= -maxDailyLossPct
+
+// ── Fixed-fractional position sizing ─────────────────────────────────────────
+// qty = (equity * riskFrac) / (stopDistance per unit)
+stopDist = close * stopPct / 100.0
+riskCash = strategy.equity * riskFracPct / 100.0
+qty      = stopDist > 0 ? math.max(1, math.floor(riskCash / stopDist)) : 0
+
+// ── Orders (simulated) ───────────────────────────────────────────────────────
+canTrade = not tradingHalted and qty > 0
+
+if canTrade and longSignal
+    strategy.entry("Long", strategy.long, qty=qty)
+    strategy.exit("Long-X", from_entry="Long", stop=close * (1 - stopPct / 100.0))
+
+if canTrade and shortSignal
+    strategy.entry("Short", strategy.short, qty=qty)
+    strategy.exit("Short-X", from_entry="Short", stop=close * (1 + stopPct / 100.0))
+
+// Opposite signal also flattens:
+if shortSignal
+    strategy.close("Long")
+if longSignal
+    strategy.close("Short")
+
+// ── Visuals ──────────────────────────────────────────────────────────────────
+plot(fast, "Fast", color.new(color.teal,   0))
+plot(slow, "Slow", color.new(color.orange, 0))
+bgcolor(tradingHalted ? color.new(color.red, 90) : na, title="Halted")

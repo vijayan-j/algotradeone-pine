@@ -1,0 +1,545 @@
+//@version=6
+// ============================================================================
+//  VIJI-4 CONFLUENCE PRO — v3.2                                  Pine Script v6
+// ----------------------------------------------------------------------------
+//  Signal indicator for NSE cash / F&O. Emits non-repainting BUY / SELL / EXIT
+//  events as Style-tab markers and as JSON webhooks for a downstream execution
+//  relay (TradingView -> relay -> Zerodha Kite / AlgoTradeOne).
+//
+//  DESIGN
+//    - 4-leg confluence : UT Bot stop | Supertrend dir | LinReg vs signal | VWAP
+//    - Closed-bar only  : every decision gated on barstate.isconfirmed
+//    - Non-repainting   : request.security uses confirmed values + no lookahead;
+//                         structure look-backs exclude the current bar
+//    - Run-based entry  : fires at the FIRST permitted bar of each confluence
+//                         run (a setup born in a blocked window fires when the
+//                         window opens - queued, not lost)
+//    - Flat-only        : the exit engine owns the position; a new entry can
+//                         fire only while flat. No silent stop-and-reverse.
+//
+//  EXECUTION CONTRACT
+//    Chart markers == webhook fires (identical gated variables). The payload is
+//    intentionally minimal - it states WHAT happened, on WHICH symbol, WHEN and
+//    at WHAT reference price, nothing more. The server / relay owns ALL
+//    execution parameters (quantity, order type, product type, exchange routing
+//    and risk). Only LONG_ENTRY / SHORT_ENTRY / LONG_EXIT / SHORT_EXIT are
+//    actionable; TREND_CHANGE is informational (transaction_type = "NONE").
+//
+//  v3.2 CHANGES (vs v3.1)
+//    REMOVED Instrument Preset and the Webhook input section. ALL execution
+//            parameters (quantity, order type, product type, exchange routing)
+//            are owned by the server / relay, so the payload is now a minimal
+//            signal event - no execution fields are passed through it.
+//    FIX     dashboard Entry/Stop - the last entry price + side are now tracked
+//            independently of the exit engine, so the Entry row is populated in
+//            every mode instead of reading empty while flat.
+//    NEW     session-filter sanity guard (warns when Allow-mode windows do not
+//            overlap trading hours -> would block every entry).
+//    UI      every signal marker (BUY / SELL / exits / sideways) is now a
+//            plotshape, so colour + visibility live in the STYLE tab. The Inputs
+//            tab holds only functional fields; background-shading colours are
+//            fixed in code because bgcolor() has no Style-tab hook.
+//
+//  QUICK SETUP
+//    1. Add to chart. Line / marker colours & visibility -> Settings > Style.
+//    2. Intraday? Enable Inputs > Intraday Square-off; the window FROM time is
+//       the square-off cutoff (set TO = the close), e.g. 15:15 - 15:30.
+//    3. Create ONE alert, condition = "Any alert() function call", and point it
+//       at your relay webhook. The relay owns exchange routing & order sizing.
+// ============================================================================
+
+indicator("Viji-4 Confluence Pro v3.2", overlay = true, max_labels_count = 500)
+
+// IST is the single source of truth for all session / time-window math.
+tz = "Asia/Kolkata"
+
+// ============================================================================
+//  INPUTS - CORE CONFLUENCE LEGS
+//  The four directional legs. A BUY needs every ENABLED leg bullish; a SELL
+//  needs every enabled leg bearish. All legs are read on confirmed bars only.
+// ============================================================================
+gUT = "1 - Leg 1: UT Bot"
+utKey = input.float(2.0, "Key value (sensitivity)", group = gUT,
+     tooltip = "ATR multiple for the trailing stop. Higher = wider stop, fewer/slower flips. Lower = tighter, more flips.")
+utAtr = input.int(1, "ATR period", minval = 1, group = gUT,
+     tooltip = "ATR length for the UT stop. 1 = classic UT Bot (true-range driven).")
+
+gST = "1 - Leg 2: Supertrend"
+stAtr  = input.int(10, "ATR length / mult", minval = 1, inline = "st", group = gST,
+     tooltip = "Left = ATR length of the Supertrend band. Right = band-distance multiplier (higher = smoother trend, later flips).")
+stMult = input.float(2.0, "", minval = 0.1, step = 0.1, inline = "st", group = gST)
+
+gLR = "1 - Leg 3: LinReg Candles"
+lrLen = input.int(11, "Regression length", minval = 1, group = gLR,
+     tooltip = "Look-back for the linear-regression value of close.")
+lrSig = input.int(7,  "Signal smoothing", minval = 1, group = gLR,
+     tooltip = "Smoothing length of the signal line the regression is compared against.")
+lrSma = input.bool(true, "Signal = SMA (off = EMA)", group = gLR,
+     tooltip = "ON = simple-MA signal line. OFF = exponential-MA (more responsive).")
+
+gVW = "1 - Leg 4: VWAP"
+useVwap  = input.bool(true, "Use VWAP leg", group = gVW,
+     tooltip = "OFF collapses the system to a 3-leg confluence (UT + Supertrend + LinReg).")
+vwAnchor = input.string("Session", "Anchor", options = ["Session", "Week", "Month"], group = gVW,
+     tooltip = "Session for intraday (5m/15m). Week/Month for swing (1h/D).")
+vwAlign  = input.bool(true, "Standard polarity (BUY above / SELL below)", group = gVW,
+     tooltip = "Standard = price above VWAP is bullish. Invert only for mean-reversion experiments.")
+
+// ============================================================================
+//  INPUTS - SIGNAL BEHAVIOR
+//  Converts a confluence run into at most one entry.
+// ============================================================================
+gSIG = "2 - Signal Behavior"
+fireOnce   = input.bool(true,  "Fire once per confluence run", group = gSIG,
+     tooltip = "ON = one signal at the first permitted bar of each run. OFF = signal on every confirmed bar the run persists.")
+alternate  = input.bool(true,  "Alternate sides", group = gSIG,
+     tooltip = "ON = ignore repeat same-side signals until the opposite side fires. With the exit engine ON this latch auto-re-arms after each exit, so same-side continuation re-entries are still allowed.")
+resetDaily = input.bool(false, "Reset alternation each session", group = gSIG,
+     tooltip = "Intraday only: clears the alternation latch at the start of every trading day.")
+sameDayRun = input.bool(false, "Run must start same session", group = gSIG,
+     tooltip = "Intraday only: rejects entries whose confluence run began on a previous day.")
+
+// ============================================================================
+//  INPUTS - EXIT ENGINE  (flat-only; no auto-reversal)
+//  When enabled, the exit engine owns the position: entries are blocked until
+//  the current position is closed. An exit is a first-class, webhook event.
+// ============================================================================
+gX = "3 - Exit Engine"
+useExit     = input.bool(true,  "Enable exit signals", group = gX,
+     tooltip = "Master switch. ON = exit engine manages the position and enforces flat-only re-entry. OFF = signal-only mode (the alternation latch is the only position model).")
+exitTrail   = input.bool(true,  "ATR trailing-stop exit", group = gX,
+     tooltip = "Primary exit. Ratchets in the trade's favour and never loosens.")
+exitAtrLen  = input.int(14,     "Trail ATR length / mult", minval = 1, inline = "trail", group = gX,
+     tooltip = "Left = ATR length for the trailing stop. Right = trail-distance multiplier (ATR x this; wider = more room, larger giveback).")
+exitAtrMul  = input.float(2.5,  "", minval = 0.1, step = 0.1, inline = "trail", group = gX)
+hardStopPct = input.float(0.0,  "Initial hard SL %  (0 = ATR only)", minval = 0.0, step = 0.1, group = gX,
+     tooltip = "Optional. Caps first-bar risk: the initial stop is the TIGHTER of the ATR trail and this fixed % from entry. 0 disables it (pure ATR trail).")
+exitMom     = input.bool(false, "Momentum-reversal exit", group = gX,
+     tooltip = "Exit a long when the full opposite (short) confluence prints, and vice-versa.")
+exitStFlip  = input.bool(false, "Supertrend-flip exit", group = gX,
+     tooltip = "Exit when Supertrend flips against the open position.")
+
+// ============================================================================
+//  INPUTS - INTRADAY SQUARE-OFF  (MIS safety net)
+//  Forces the position flat before the close so the broker's auto-square-off
+//  never fires at an uncontrolled price. Independent of the Exit Engine switch.
+// ============================================================================
+gEOD = "4 - Intraday Square-off (IST)"
+useEOD    = input.bool(false, "Square-off", inline = "eod", group = gEOD,
+     tooltip = "Intraday / MIS only. From the window FROM time until the close, the position is flattened (EXIT event) and new entries are blocked. Set FROM = your square-off time and TO = the market close (e.g. 15:15 - 15:30). A close-bar backstop guarantees a flat close even if the time is mis-set. Leave OFF for positional / CNC.")
+sqoffSess = input.session("1515-1530", "", inline = "eod", group = gEOD)
+
+// ============================================================================
+//  INPUTS - SESSION FILTER  (IST, two windows)
+//  Restricts WHEN entries may fire. Exits are never blocked by this filter.
+// ============================================================================
+gSES = "5 - Session Filter (IST)"
+useSession = input.bool(false, "Enable session filter", group = gSES,
+     tooltip = "Master switch for the two windows below. Filters ENTRIES only - exits always fire.")
+sesMode    = input.string("Block", "Mode", options = ["Allow", "Block"], group = gSES,
+     tooltip = "Block = NO entries inside the windows (e.g. mute the open & pre-close). Allow = entries ONLY inside the windows. Note: in Allow mode the windows MUST overlap trading hours, otherwise every entry is blocked (an on-chart warning flags this).")
+w1On  = input.bool(true, "Window 1", inline = "w1", group = gSES, tooltip = "Toggle + From-To time range (IST).")
+sess1 = input.session("0915-0930", "", inline = "w1", group = gSES)
+w2On  = input.bool(true, "Window 2", inline = "w2", group = gSES, tooltip = "Toggle + From-To time range (IST).")
+sess2 = input.session("1445-1530", "", inline = "w2", group = gSES)
+
+// ============================================================================
+//  INPUTS - QUALITY FILTERS  (optional, all default OFF)
+//  Each independently raises signal quality by demanding regime / structure
+//  confirmation.
+// ============================================================================
+gQ = "6 - Quality Filters"
+useAdx = input.bool(false, "ADX regime filter", group = gQ,
+     tooltip = "Require a trending regime (ADX above the floor).")
+adxLen = input.int(14, "ADX DI length", minval = 1, group = gQ)
+adxSmo = input.int(14, "ADX smoothing", minval = 1, group = gQ)
+adxMin = input.float(20.0, "Min ADX", step = 1, group = gQ,
+     tooltip = "Block entries when ADX is below this (filter on).")
+
+useAtrX  = input.bool(false, "ATR expansion (breakout)", group = gQ,
+     tooltip = "Bar range must exceed avg ATR x multiple - passes breakouts, cuts dead range-bar whips.")
+atrXLen  = input.int(14,  "ATR length", minval = 1, group = gQ)
+atrXMult = input.float(1.3, "Range/ATR multiple", step = 0.1, group = gQ,
+     tooltip = "Bar range must exceed ATR x this value.")
+
+useStruct = input.bool(false, "Structure break", group = gQ,
+     tooltip = "BUY needs close > prior-N-bar high; SELL needs close < prior-N-bar low. The prior range excludes the current bar (no repaint).")
+structLen = input.int(10, "Structure lookback", minval = 1, group = gQ,
+     tooltip = "Number of prior bars used for the breakout high/low.")
+
+useHtf = input.bool(false, "HTF EMA trend filter", group = gQ,
+     tooltip = "Align entries with a higher-timeframe EMA. Non-repainting (uses the last CLOSED HTF bar).")
+htfTF  = input.timeframe("60", "HTF timeframe", group = gQ)
+emaLen = input.int(50, "HTF EMA length", minval = 1, group = gQ)
+
+useVwD   = input.bool(false, "Min distance from VWAP", group = gQ,
+     tooltip = "Reject entries hugging VWAP (chop). Requires |price - VWAP| above the % below.")
+vwDistPc = input.float(0.15, "Min |price-VWAP| %", minval = 0.0, step = 0.05, group = gQ)
+
+// ============================================================================
+//  INPUTS - SIDEWAYS / NO-TRADE ZONE  (display aid)
+//  Shades bars where BOTH trend strength (ADX) and volatility (ATR%) are low.
+//  Purely informational - it never blocks signals. The "SW" marker visibility
+//  is in the Style tab.
+// ============================================================================
+gSW = "7 - Sideways / No-Trade Zone"
+showSideways = input.bool(true,  "Detect sideways zone", group = gSW)
+swAdxMax     = input.float(18.0, "Sideways if ADX below", step = 1, group = gSW)
+swAtrLen     = input.int(14,     "Sideways ATR length", minval = 1, group = gSW)
+swAtrPctMax  = input.float(0.35, "Sideways if ATR% below", step = 0.05, group = gSW,
+     tooltip = "ATR as % of price. BOTH ADX and ATR% must be below their thresholds (logical AND).")
+
+// ============================================================================
+//  INPUTS - DISPLAY  (functional only - all colours live in the Style tab)
+// ============================================================================
+gD = "8 - Display"
+showBG    = input.bool(true, "Shade confluence zones", group = gD,
+     tooltip = "Background tint while a full BUY/SELL confluence is active. bgcolor() has no Style-tab control, so its colour is fixed in code.")
+showTable = input.bool(true, "Show status table", inline = "tbl", group = gD)
+tblPos    = input.string("Top Right", "", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], inline = "tbl", group = gD,
+     tooltip = "Where the status dashboard sits on the chart, and its text size. (Tables cannot be moved to the Style tab.)")
+tblSize   = input.string("Small", "", options = ["Tiny", "Small", "Normal", "Large"], inline = "tbl", group = gD)
+
+// ============================================================================
+//  CORE CALCULATIONS - DIRECTIONAL LEGS
+// ============================================================================
+src = close
+
+// --- Leg 1: UT Bot ATR trailing stop -----------------------------------------
+utATR  = ta.atr(utAtr)
+utLoss = utKey * utATR
+var float utStop = na
+utStop := na(utStop[1]) ? src :
+   src > nz(utStop[1]) and src[1] > nz(utStop[1]) ? math.max(nz(utStop[1]), src - utLoss) :
+   src < nz(utStop[1]) and src[1] < nz(utStop[1]) ? math.min(nz(utStop[1]), src + utLoss) :
+   src > nz(utStop[1]) ? src - utLoss : src + utLoss
+utBull = src > utStop
+utBear = src < utStop
+
+// --- Leg 2: Supertrend (dir: -1 up, +1 down) ----------------------------------
+[stLine, stDir] = ta.supertrend(stMult, stAtr)
+stBull = stDir < 0
+stBear = stDir > 0
+
+// --- Leg 3: LinReg candles vs smoothed signal ---------------------------------
+lrClose  = ta.linreg(close, lrLen, 0)
+lrSignal = lrSma ? ta.sma(lrClose, lrSig) : ta.ema(lrClose, lrSig)
+lrBull   = lrClose > lrSignal
+lrBear   = lrClose < lrSignal
+
+// --- Leg 4: Anchored VWAP (manual cumulative; resets on the anchor boundary) ---
+anchorTF  = vwAnchor == "Session" ? "D" : vwAnchor == "Week" ? "W" : "M"
+newAnchor = ta.change(time(anchorTF)) != 0
+var float cumPV = na
+var float cumV  = na
+if newAnchor or na(cumPV)
+    cumPV := hlc3 * volume
+    cumV  := volume
+else
+    cumPV += hlc3 * volume
+    cumV  += volume
+vwapValue = cumV > 0 ? cumPV / cumV : hlc3
+vwBullRaw = vwAlign ? close > vwapValue : close < vwapValue
+vwBearRaw = vwAlign ? close < vwapValue : close > vwapValue
+vwapBull  = not useVwap or vwBullRaw   // neutral (true) when the leg is disabled
+vwapBear  = not useVwap or vwBearRaw
+
+// --- Confluence (all enabled legs must agree) ---------------------------------
+buyState  = utBull and stBull and lrBull and vwapBull
+sellState = utBear and stBear and lrBear and vwapBear
+
+confirmed = barstate.isconfirmed   // single gate for every decision below
+
+// ============================================================================
+//  FILTER EVALUATION  (entries only - exits are never filtered)
+// ============================================================================
+dayStart = time("D")                                  // reused by session-reset + run-day checks
+barMin   = hour(time, tz) * 60 + minute(time, tz)     // bar time-of-day, IST minutes
+
+// --- Helpers: parse the FROM / TO time of a "HHMM-HHMM" session string ---------
+f_hhmmStart(_s) =>
+    _hh = int(str.tonumber(str.substring(_s, 0, 2)))
+    _mm = int(str.tonumber(str.substring(_s, 2, 4)))
+    _hh * 60 + _mm
+f_hhmmEnd(_s) =>
+    _hh = int(str.tonumber(str.substring(_s, 5, 7)))
+    _mm = int(str.tonumber(str.substring(_s, 7, 9)))
+    _hh * 60 + _mm
+
+// --- Session windows (native session inputs; tz-correct via the 3rd argument) --
+// time(tf, session, tz) returns na when the current bar is outside the session.
+inW1 = w1On and not na(time(timeframe.period, sess1, tz))
+inW2 = w2On and not na(time(timeframe.period, sess2, tz))
+inAnyWin = inW1 or inW2
+sessionOK = not useSession ? true : sesMode == "Allow" ? inAnyWin : not inAnyWin
+
+// --- Intraday square-off (robust: half-open cutoff + close-bar backstop) -------
+// Uses ONLY the window's FROM time as the cutoff. ">= FROM" still trips if no
+// bar lands on the boundary; session.islastbar_regular backstops an out-of-
+// session time so it resolves at the close instead of silently never firing.
+sqoffStartMin = f_hhmmStart(sqoffSess)
+eodCut = useEOD and ((session.ismarket and barMin >= sqoffStartMin) or session.islastbar_regular)
+
+// --- Session bounds of THIS instrument (for the config-sanity guards) ----------
+var int sessFirstMin = na
+var int sessLastMin  = na
+if session.isfirstbar_regular
+    sessFirstMin := hour(time, tz) * 60 + minute(time, tz)
+if session.islastbar_regular
+    sessLastMin := hour(time_close, tz) * 60 + minute(time_close, tz)
+
+// --- Config sanity: WARN (never fail silently) on un-honourable time settings --
+f_overlaps(_on, _s, _first, _last) =>
+    _on and not na(_first) and not na(_last) and f_hhmmStart(_s) < _last and f_hhmmEnd(_s) > _first
+anyWinOverlaps = f_overlaps(w1On, sess1, sessFirstMin, sessLastMin) or f_overlaps(w2On, sess2, sessFirstMin, sessLastMin)
+
+sqoffWarn = ""
+if useEOD and not na(sessLastMin) and sqoffStartMin > sessLastMin
+    sqoffWarn := "Square-off time is AFTER the session close -> firing on the close bar instead."
+else if useEOD and not na(sessFirstMin) and sqoffStartMin < sessFirstMin
+    sqoffWarn := "Square-off time is BEFORE the open -> no entries will ever be taken."
+
+sessWarn = ""
+if useSession and sesMode == "Allow" and not na(sessFirstMin) and not na(sessLastMin) and not anyWinOverlaps
+    sessWarn := "Allow-mode session windows do not overlap trading hours -> every entry is blocked."
+
+// --- ADX regime (diP/diM are required by the tuple but unused) -----------------
+[diP, diM, adxVal] = ta.dmi(adxLen, adxSmo)
+adxOK = not useAdx or adxVal > adxMin
+
+// --- ATR expansion ------------------------------------------------------------
+atrX     = ta.atr(atrXLen)
+barRange = high - low
+atrXOK   = not useAtrX or barRange > atrX * atrXMult
+
+// --- Structure break (prior N-bar extreme excludes current bar -> no repaint) --
+priorHigh = ta.highest(high, structLen)[1]
+priorLow  = ta.lowest(low,  structLen)[1]
+structLongOK  = not useStruct or close > priorHigh
+structShortOK = not useStruct or close < priorLow
+
+// --- HTF EMA (value of the last CLOSED HTF bar -> non-repainting) --------------
+htfEma = request.security(syminfo.tickerid, htfTF, ta.ema(close, emaLen)[1], lookahead = barmerge.lookahead_off)
+htfLongOK  = not useHtf or close > htfEma
+htfShortOK = not useHtf or close < htfEma
+
+// --- Minimum VWAP distance ----------------------------------------------------
+vwapDistPct = math.abs(close - vwapValue) / vwapValue * 100
+vwDistOK    = not useVwD or vwapDistPct >= vwDistPc
+
+longQuality  = sessionOK and adxOK and atrXOK and structLongOK  and htfLongOK  and vwDistOK
+shortQuality = sessionOK and adxOK and atrXOK and structShortOK and htfShortOK and vwDistOK
+
+// ============================================================================
+//  SIDEWAYS / NO-TRADE DETECTION  (display only)
+// ============================================================================
+swAtr      = ta.atr(swAtrLen)
+atrPct     = swAtr / close * 100
+isSideways = showSideways and adxVal < swAdxMax and atrPct < swAtrPctMax and not buyState and not sellState
+
+// ============================================================================
+//  POSITION STATE  (managed by the exit engine)
+//  pos: 1 = long, -1 = short, 0 = flat. Declared here because the ENTRY gate
+//  reads `pos` to enforce flat-only re-entry. lastEntryPrice / lastEntrySide are
+//  tracked separately (always, even in signal-only mode) for the dashboard.
+// ============================================================================
+var int   pos            = 0
+var float trailStop      = na
+var float lastEntryPrice = na
+var int   lastEntrySide  = 0
+
+// ============================================================================
+//  ENTRY  (run-based, alternating, flat-aware)
+// ============================================================================
+var int lastSide = 0
+newSession = ta.change(dayStart) != 0
+if resetDaily and newSession
+    lastSide := 0
+
+buyAllowed  = not alternate or lastSide != 1
+sellAllowed = not alternate or lastSide != -1
+
+// Per-run latch: each fresh confluence run is eligible to fire exactly once.
+var bool buyRunDone  = false
+var bool sellRunDone = false
+var int  buyRunSes   = na
+var int  sellRunSes  = na
+if buyState and not buyState[1]
+    buyRunDone := false
+    buyRunSes  := dayStart
+if sellState and not sellState[1]
+    sellRunDone := false
+    sellRunSes  := dayStart
+
+buyDayOK  = not sameDayRun or buyRunSes  == dayStart
+sellDayOK = not sameDayRun or sellRunSes == dayStart
+
+// Flat-only: when the exit engine owns the position a new entry may fire only
+// while flat. With exits OFF, flatOK is always true (signal-only model).
+flatOK = not useExit or pos == 0
+
+buyReady  = buyState  and confirmed and buyAllowed  and longQuality  and buyDayOK  and flatOK and not eodCut
+sellReady = sellState and confirmed and sellAllowed and shortQuality and sellDayOK and flatOK and not eodCut
+
+longEntry  = fireOnce ? buyReady  and not buyRunDone  : buyReady
+shortEntry = fireOnce ? sellReady and not sellRunDone : sellReady
+
+if longEntry
+    lastSide       := 1
+    buyRunDone     := true
+    lastEntryPrice := close
+    lastEntrySide  := 1
+else if shortEntry
+    lastSide       := -1
+    sellRunDone    := true
+    lastEntryPrice := close
+    lastEntrySide  := -1
+
+// ============================================================================
+//  EXIT ENGINE  (flat-only; ratcheting ATR trail + optional triggers + EOD)
+// ============================================================================
+manageExits = useExit or useEOD      // track `pos` only when something can close it
+exitATR = ta.atr(exitAtrLen)
+
+// On a fresh entry: set position and seed the stop = tighter of ATR trail and
+// the optional fixed-% hard stop (lastEntryPrice == entry price on this bar).
+if manageExits and longEntry
+    pos := 1
+    atrStop  = lastEntryPrice - exitATR * exitAtrMul
+    hardStop = hardStopPct > 0 ? lastEntryPrice * (1.0 - hardStopPct / 100.0) : na
+    trailStop := na(hardStop) ? atrStop : math.max(atrStop, hardStop)
+else if manageExits and shortEntry
+    pos := -1
+    atrStop  = lastEntryPrice + exitATR * exitAtrMul
+    hardStop = hardStopPct > 0 ? lastEntryPrice * (1.0 + hardStopPct / 100.0) : na
+    trailStop := na(hardStop) ? atrStop : math.min(atrStop, hardStop)
+
+// Ratchet the trail in the trade's favour only (never loosens).
+if pos == 1 and confirmed
+    trailStop := math.max(nz(trailStop), close - exitATR * exitAtrMul)
+else if pos == -1 and confirmed
+    trailStop := math.min(nz(trailStop), close + exitATR * exitAtrMul)
+
+// Discretionary exit triggers (only while in a position, exits enabled).
+longTrailHit  = useExit and exitTrail  and pos == 1  and confirmed and close < trailStop
+shortTrailHit = useExit and exitTrail  and pos == -1 and confirmed and close > trailStop
+longMomExit   = useExit and exitMom    and pos == 1  and confirmed and sellState
+shortMomExit  = useExit and exitMom    and pos == -1 and confirmed and buyState
+longStExit    = useExit and exitStFlip and pos == 1  and confirmed and stBear
+shortStExit   = useExit and exitStFlip and pos == -1 and confirmed and stBull
+
+// Intraday square-off (independent of useExit; gated by useEOD via eodCut).
+eodExitLong  = pos == 1  and confirmed and eodCut
+eodExitShort = pos == -1 and confirmed and eodCut
+
+longExit  = longTrailHit  or longMomExit  or longStExit  or eodExitLong
+shortExit = shortTrailHit or shortMomExit or shortStExit or eodExitShort
+
+// Commit the exit: go flat and re-arm BOTH sides so a same-direction
+// continuation can re-enter on the next fresh run.
+if longExit or shortExit
+    pos       := 0
+    trailStop := na
+    lastSide  := 0
+
+// Informational only: Supertrend direction flip (NOT an order).
+trendChange = confirmed and ta.change(stDir) != 0
+
+// ============================================================================
+//  VISUALS
+//  Plots and signal markers (plotshape) are all editable in the Style tab.
+// ============================================================================
+// Lines (Style tab: colour / width / line style / visibility).
+plot(utBull ? utStop : na, "UT Stop Up",   color = color.teal,   linewidth = 1, style = plot.style_linebr)
+plot(utBear ? utStop : na, "UT Stop Down", color = color.maroon, linewidth = 1, style = plot.style_linebr)
+plot(stBull ? stLine : na, "Supertrend Up",   color = color.green, linewidth = 2, style = plot.style_linebr)
+plot(stBear ? stLine : na, "Supertrend Down", color = color.red,   linewidth = 2, style = plot.style_linebr)
+plot(useVwap ? vwapValue : na, "VWAP", color = color.blue, linewidth = 2)
+plot(pos != 0 ? trailStop : na, "Active Trailing Stop", color = color.orange, linewidth = 1, style = plot.style_linebr)
+
+// Signal markers (Style tab: colour / visibility). Each title is a Style entry.
+plotshape(longEntry,  title = "BUY",        style = shape.labelup,   location = location.belowbar, color = color.green,               text = "BUY",  textcolor = color.white, size = size.small)
+plotshape(shortEntry, title = "SELL",       style = shape.labeldown, location = location.abovebar, color = color.red,                 text = "SELL", textcolor = color.white, size = size.small)
+plotshape(longExit,   title = "Exit Long",  style = shape.labeldown, location = location.abovebar, color = color.new(color.green, 35), text = "X",    textcolor = color.white, size = size.tiny)
+plotshape(shortExit,  title = "Exit Short", style = shape.labelup,   location = location.belowbar, color = color.new(color.red, 35),   text = "X",    textcolor = color.white, size = size.tiny)
+plotshape(isSideways and not isSideways[1], title = "Sideways", style = shape.labelup, location = location.belowbar, color = color.new(color.gray, 20), text = "SW", textcolor = color.white, size = size.tiny)
+
+// Background shading (bgcolor has no Style-tab control -> colours fixed here).
+bgcolor(showBG and buyState ? color.new(color.green, 92) : showBG and sellState ? color.new(color.red, 92) : na, title = "Confluence zone")
+bgcolor(isSideways ? color.new(color.gray, 90) : na, title = "Sideways zone")
+
+// Config-warning banner (square-off / session mis-set) - drawn once, loud.
+warnMsg = sqoffWarn
+if sessWarn != ""
+    warnMsg := warnMsg == "" ? sessWarn : warnMsg + "\n" + sessWarn
+if barstate.islast and warnMsg != ""
+    label.new(bar_index, high, "CONFIG WARNING\n" + warnMsg, yloc = yloc.price, style = label.style_label_down,
+         color = color.new(color.orange, 0), textcolor = color.white, size = size.normal)
+
+// ----------------------------------------------------------------------------
+//  STATUS DASHBOARD (table)  -  position & size follow the Display inputs.
+// ----------------------------------------------------------------------------
+_tblPos = tblPos == "Top Left" ? position.top_left : tblPos == "Bottom Right" ? position.bottom_right : tblPos == "Bottom Left" ? position.bottom_left : tblPos == "Middle Right" ? position.middle_right : position.top_right
+_tblSz  = tblSize == "Tiny" ? size.tiny : tblSize == "Normal" ? size.normal : tblSize == "Large" ? size.large : size.small
+stopDistPct = pos != 0 and not na(trailStop) ? math.abs(close - trailStop) / close * 100 : na
+
+var table dbg = table.new(_tblPos, 2, 11, border_width = 1)
+f_dir(_r, _l, _b) =>
+    table.cell(dbg, 0, _r, _l, text_size = _tblSz, bgcolor = color.new(color.gray, 70), text_color = color.white)
+    table.cell(dbg, 1, _r, _b ? "BULL" : "BEAR", text_size = _tblSz, text_color = _b ? color.lime : color.red)
+f_state(_r, _l, _ok) =>
+    table.cell(dbg, 0, _r, _l, text_size = _tblSz, bgcolor = color.new(color.gray, 40), text_color = color.white)
+    table.cell(dbg, 1, _r, _ok ? "PASS" : "-", text_size = _tblSz, text_color = _ok ? color.lime : color.red)
+f_info(_r, _l, _v, _c) =>
+    table.cell(dbg, 0, _r, _l, text_size = _tblSz, bgcolor = color.new(color.gray, 40), text_color = color.white)
+    table.cell(dbg, 1, _r, _v, text_size = _tblSz, text_color = _c)
+if barstate.islast and showTable
+    f_dir(0, "UT", utBull)
+    f_dir(1, "Supertrend", stBull)
+    f_dir(2, "LinReg", lrBull)
+    f_dir(3, useVwap ? "VWAP(" + vwAnchor + ")" : "VWAP(off)", vwapBull)
+    f_state(4, "Quality L/S", longQuality or shortQuality)
+    f_state(5, "Long setup", buyState)
+    f_state(6, "Short setup", sellState)
+    f_info(7, "Regime", isSideways ? "SIDEWAYS" : "TRENDING", isSideways ? color.gray : color.aqua)
+    f_info(8, "Position", pos == 1 ? "LONG" : pos == -1 ? "SHORT" : "FLAT", pos == 1 ? color.lime : pos == -1 ? color.red : color.gray)
+    f_info(9, "Entry", not na(lastEntryPrice) ? (lastEntrySide == 1 ? "L " : "S ") + str.tostring(lastEntryPrice, format.mintick) : "-", pos != 0 ? color.white : color.gray)
+    f_info(10, "Stop", pos != 0 and not na(trailStop) ? str.tostring(trailStop, format.mintick) + "  (" + str.tostring(stopDistPct, "#.##") + "%)" : "-", color.orange)
+
+// ============================================================================
+//  ALERTS  (webhook only)
+//  Create ONE alert with condition = "Any alert() function call".
+//  The payload is a MINIMAL signal event; the server / relay applies quantity,
+//  order type, product type, exchange routing and risk centrally.
+//  Fields:
+//    event            - LONG_ENTRY | SHORT_ENTRY | LONG_EXIT | SHORT_EXIT | TREND_CHANGE
+//    signal_id        - idempotency key (symbol-interval-bartime); dedupe on this
+//    transaction_type - BUY | SELL | NONE  (direction of the order to place/close)
+//    symbol           - chart ticker (relay maps it to the broker instrument)
+//    price            - reference close for logging / slippage reconciliation
+//    interval         - chart timeframe the signal fired on
+//    time             - signal bar time, IST
+//  Actionable : LONG_ENTRY / SHORT_ENTRY / LONG_EXIT / SHORT_EXIT
+//  Info only  : TREND_CHANGE (transaction_type = "NONE" -> relay no-op)
+// ============================================================================
+ts = str.format_time(time, "yyyy-MM-dd HH:mm", tz)
+f_payload(_event, _side) =>
+    sid = syminfo.ticker + "-" + timeframe.period + "-" + str.tostring(time)
+    '{"event":"' + _event + '"' +
+       ',"signal_id":"' + sid + '"' +
+       ',"transaction_type":"' + _side + '"' +
+       ',"symbol":"' + syminfo.ticker + '"' +
+       ',"price":' + str.tostring(close, format.mintick) +
+       ',"interval":"' + timeframe.period + '"' +
+       ',"time":"' + ts + '"}'
+
+if longEntry
+    alert(f_payload("LONG_ENTRY",   "BUY"),  alert.freq_once_per_bar_close)
+if shortEntry
+    alert(f_payload("SHORT_ENTRY",  "SELL"), alert.freq_once_per_bar_close)
+if longExit
+    alert(f_payload("LONG_EXIT",    "SELL"), alert.freq_once_per_bar_close)
+if shortExit
+    alert(f_payload("SHORT_EXIT",   "BUY"),  alert.freq_once_per_bar_close)
+if trendChange
+    alert(f_payload("TREND_CHANGE", "NONE"), alert.freq_once_per_bar_close)

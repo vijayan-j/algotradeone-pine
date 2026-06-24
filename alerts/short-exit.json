@@ -1,0 +1,9 @@
+{
+  "event": "SHORT_EXIT",
+  "signal_id": "RELIANCE-5-1719225600000",
+  "transaction_type": "BUY",
+  "symbol": "RELIANCE",
+  "price": 2925.10,
+  "interval": "5",
+  "time": "2026-06-24 14:20"
+}

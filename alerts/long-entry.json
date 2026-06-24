@@ -1,0 +1,9 @@
+{
+  "event": "LONG_ENTRY",
+  "signal_id": "RELIANCE-5-1719210600000",
+  "transaction_type": "BUY",
+  "symbol": "RELIANCE",
+  "price": 2945.50,
+  "interval": "5",
+  "time": "2026-06-24 10:15"
+}

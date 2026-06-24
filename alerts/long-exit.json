@@ -1,0 +1,9 @@
+{
+  "event": "LONG_EXIT",
+  "signal_id": "RELIANCE-5-1719223200000",
+  "transaction_type": "SELL",
+  "symbol": "RELIANCE",
+  "price": 2958.75,
+  "interval": "5",
+  "time": "2026-06-24 13:40"
+}
