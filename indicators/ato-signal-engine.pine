@@ -1,6 +1,6 @@
 //@version=6
 // ============================================================================
-//  VIJI-4 CONFLUENCE PRO — v3.2                                  Pine Script v6
+//  ATO SIGNAL ENGINE — 4-LEG CONFLUENCE — v3.2                   Pine Script v6
 // ----------------------------------------------------------------------------
 //  Signal indicator for NSE cash / F&O. Emits non-repainting BUY / SELL / EXIT
 //  events as Style-tab markers and as JSON webhooks for a downstream execution
@@ -48,7 +48,7 @@
 //       at your relay webhook. The relay owns exchange routing & order sizing.
 // ============================================================================
 
-indicator("Viji-4 Confluence Pro v3.2", overlay = true, max_labels_count = 500)
+indicator("ATO Signal Engine — 4-Leg Confluence v3.2", overlay = true, max_labels_count = 500)
 
 // IST is the single source of truth for all session / time-window math.
 tz = "Asia/Kolkata"

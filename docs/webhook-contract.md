@@ -1,6 +1,6 @@
 # Webhook Contract (Pine → Relay)
 
-Source of truth: `f_payload()` in `indicators/viji-4-confluence-pro.pine`. The
+Source of truth: `f_payload()` in `indicators/ato-signal-engine.pine`. The
 payload is a **minimal signal event** — it states what happened, on which symbol,
 when, and at what reference price. Nothing else. The relay/server owns all
 execution parameters.

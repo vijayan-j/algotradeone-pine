@@ -1,11 +1,11 @@
 //@version=6
 // =============================================================================
-//  VijiSignals — confluence leg primitives extracted from Viji-4 Confluence Pro
+//  VijiSignals — confluence leg primitives extracted from ATO Signal Engine
 //  v3.2. The four export bodies are byte-faithful to the indicator's formulas so
 //  a future backtest strategy twin can share ONE implementation of the legs.
 //
 //  IMPORTANT
-//    The live indicator (indicators/viji-4-confluence-pro.pine) stays
+//    The live indicator (indicators/ato-signal-engine.pine) stays
 //    self-contained on purpose — it must compile on TradingView without any
 //    published dependency. This library is for the strategy twin, not the live
 //    script. To use it you must publish it (even privately) on TradingView and

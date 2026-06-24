@@ -1,6 +1,6 @@
-# Confluence Logic — Viji-4 Confluence Pro v3.2
+# Confluence Logic — ATO Signal Engine v3.2
 
-Reference spec for `indicators/viji-4-confluence-pro.pine`. This documents what
+Reference spec for `indicators/ato-signal-engine.pine`. This documents what
 the live indicator actually does — not an aspiration.
 
 ## Core rule
@@ -74,7 +74,7 @@ distance).
 
 ## Backtest parity
 
-`strategies/viji-4-confluence-pro.pine` (not yet built) must replicate this whole
+`strategies/ato-signal-engine.pine` (not yet built) must replicate this whole
 model — not just the legs. The legs come from `VijiSignals.pine`; the entry latch,
 flat-only gate, and exit engine must be ported so the historical test validates
 the live signal rather than a re-implementation.

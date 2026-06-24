@@ -25,7 +25,7 @@ here fire JSON webhook alerts consumed by the execution server
 
 | Path            | Purpose |
 |-----------------|---------|
-| `indicators/`   | `indicator()` scripts. Live signal sources; fire webhook alerts. **No order calls, no sizing.** Canonical live script: `viji-4-confluence-pro.pine` (v3.2). |
+| `indicators/`   | `indicator()` scripts. Live signal sources; fire webhook alerts. **No order calls, no sizing.** Canonical live script: `ato-signal-engine.pine` (v3.2). |
 | `strategies/`   | `strategy()` scripts. Backtest/validation twins of indicators. Simulated sizing + daily-loss circuit breaker live here. |
 | `libraries/`    | `library()` modules. Reusable signal primitives (UT Bot, Supertrend, LinReg candles, anchored VWAP). Imported via `import <user>/<lib>/<ver>`. |
 | `alerts/`       | Canonical JSON payload templates the server expects. Source of truth for the wire contract. |
