@@ -512,29 +512,59 @@ _tblPos = tblPos == "Top Left" ? position.top_left : tblPos == "Bottom Right" ? 
 _tblSz  = tblSize == "Tiny" ? size.tiny : tblSize == "Normal" ? size.normal : tblSize == "Large" ? size.large : size.small
 stopDistPct = trailActive ? math.abs(close - trailStop) / close * 100 : na
 
-var table dbg = table.new(_tblPos, 2, 12, border_width = 1)
-f_dir(_r, _l, _b) =>
-    table.cell(dbg, 0, _r, _l, text_size = _tblSz, bgcolor = color.new(color.gray, 70), text_color = color.white)
-    table.cell(dbg, 1, _r, _b ? "BULL" : "BEAR", text_size = _tblSz, text_color = _b ? color.lime : color.red)
-f_state(_r, _l, _ok) =>
-    table.cell(dbg, 0, _r, _l, text_size = _tblSz, bgcolor = color.new(color.gray, 40), text_color = color.white)
-    table.cell(dbg, 1, _r, _ok ? "PASS" : "-", text_size = _tblSz, text_color = _ok ? color.lime : color.red)
-f_info(_r, _l, _v, _c) =>
-    table.cell(dbg, 0, _r, _l, text_size = _tblSz, bgcolor = color.new(color.gray, 40), text_color = color.white)
-    table.cell(dbg, 1, _r, _v, text_size = _tblSz, text_color = _c)
+// Dashboard palette (dark theme — every cell readable on any chart background).
+DASH_BG     = #131722      // value-cell background
+DASH_LABEL  = #1f2433      // label-cell background
+DASH_SECT   = #0b0d12      // section-divider background
+DASH_FRAME  = #2a2e39      // frame / cell borders
+DASH_TITLE  = #2962ff      // title-bar accent
+DASH_GREEN  = #26a69a      // bullish / pass / long
+DASH_RED    = #ef5350      // bearish / short
+DASH_INFO   = #29b6f6      // info (trending)
+DASH_ORANGE = #ffb74d      // active stop
+DASH_TXT    = #d1d4dc      // primary text
+DASH_MUTE   = #787b86      // muted / neutral text
+
+var table dbg = table.new(_tblPos, 2, 16, bgcolor = DASH_BG, frame_color = DASH_FRAME, frame_width = 1, border_color = DASH_FRAME, border_width = 1)
+
+// Title bar (brand + chart interval).
+f_title(_r) =>
+    table.cell(dbg, 0, _r, "ATO SIGNAL ENGINE", text_size = _tblSz, bgcolor = DASH_TITLE, text_color = color.white, text_halign = text.align_left)
+    table.cell(dbg, 1, _r, timeframe.period, text_size = _tblSz, bgcolor = DASH_TITLE, text_color = color.white, text_halign = text.align_right)
+// Section divider (small muted header spanning the row).
+f_section(_r, _l) =>
+    table.cell(dbg, 0, _r, _l, text_size = size.tiny, bgcolor = DASH_SECT, text_color = DASH_MUTE, text_halign = text.align_left)
+    table.cell(dbg, 1, _r, "", bgcolor = DASH_SECT)
+// Leg row: label + a green/red BULL/BEAR badge.
+f_leg(_r, _l, _bull) =>
+    table.cell(dbg, 0, _r, _l, text_size = _tblSz, bgcolor = DASH_LABEL, text_color = DASH_TXT, text_halign = text.align_left)
+    table.cell(dbg, 1, _r, _bull ? "▲ BULL" : "▼ BEAR", text_size = _tblSz, bgcolor = _bull ? DASH_GREEN : DASH_RED, text_color = color.white, text_halign = text.align_center)
+// Pass row: label + green PASS badge or muted dash.
+f_pass(_r, _l, _ok) =>
+    table.cell(dbg, 0, _r, _l, text_size = _tblSz, bgcolor = DASH_LABEL, text_color = DASH_TXT, text_halign = text.align_left)
+    table.cell(dbg, 1, _r, _ok ? "PASS" : "—", text_size = _tblSz, bgcolor = _ok ? DASH_GREEN : DASH_BG, text_color = _ok ? color.white : DASH_MUTE, text_halign = text.align_center)
+// Info/value row: label + caller-coloured value (bg + text colour).
+f_val(_r, _l, _v, _bg, _tc) =>
+    table.cell(dbg, 0, _r, _l, text_size = _tblSz, bgcolor = DASH_LABEL, text_color = DASH_TXT, text_halign = text.align_left)
+    table.cell(dbg, 1, _r, _v, text_size = _tblSz, bgcolor = _bg, text_color = _tc, text_halign = text.align_center)
+
 if barstate.islast and showTable
-    f_dir(0, "UT", utBull)
-    f_dir(1, "Supertrend", stBull)
-    f_dir(2, "LinReg", lrBull)
-    f_dir(3, useVwap ? "VWAP(" + vwAnchor + ")" : "VWAP(off)", vwapBull)
-    f_dir(4, useTrendA ? "TrendCloud" : "TrendCloud(off)", taTrendBull)
-    f_state(5, "Quality L/S", longQuality or shortQuality)
-    f_state(6, "Long setup", buyState)
-    f_state(7, "Short setup", sellState)
-    f_info(8, "Regime", isSideways ? "SIDEWAYS" : "TRENDING", isSideways ? color.gray : color.aqua)
-    f_info(9, "Position", pos == 1 ? "LONG" : pos == -1 ? "SHORT" : "FLAT", pos == 1 ? color.lime : pos == -1 ? color.red : color.gray)
-    f_info(10, "Entry", not na(lastEntryPrice) ? (lastEntrySide == 1 ? "L " : "S ") + str.tostring(lastEntryPrice, format.mintick) : "-", pos != 0 ? color.white : color.gray)
-    f_info(11, "Stop", trailActive ? str.tostring(trailStop, format.mintick) + "  (" + str.tostring(stopDistPct, "#.##") + "%)" : "-", color.orange)
+    f_title(0)
+    f_section(1, "LEGS")
+    f_leg(2, "UT Bot",     utBull)
+    f_leg(3, "Supertrend", stBull)
+    f_leg(4, "LinReg",     lrBull)
+    f_leg(5, useVwap   ? "VWAP " + vwAnchor : "VWAP (off)",        vwapBull)
+    f_leg(6, useTrendA ? "Trend Cloud"      : "Trend Cloud (off)", taTrendBull)
+    f_section(7, "SIGNAL")
+    f_pass(8,  "Quality L/S", longQuality or shortQuality)
+    f_pass(9,  "Long setup",  buyState)
+    f_pass(10, "Short setup", sellState)
+    f_val(11, "Regime", isSideways ? "SIDEWAYS" : "TRENDING", DASH_BG, isSideways ? DASH_MUTE : DASH_INFO)
+    f_section(12, "POSITION")
+    f_val(13, "Position", pos == 1 ? "LONG" : pos == -1 ? "SHORT" : "FLAT", pos == 1 ? DASH_GREEN : pos == -1 ? DASH_RED : DASH_BG, pos == 0 ? DASH_MUTE : color.white)
+    f_val(14, "Entry", not na(lastEntryPrice) ? (lastEntrySide == 1 ? "L " : "S ") + str.tostring(lastEntryPrice, format.mintick) : "—", DASH_BG, pos != 0 ? DASH_TXT : DASH_MUTE)
+    f_val(15, "Stop", trailActive ? str.tostring(trailStop, format.mintick) + "  " + str.tostring(stopDistPct, "#.##") + "%" : "—", DASH_BG, trailActive ? DASH_ORANGE : DASH_MUTE)
 
 // ── Alerts (webhook only) ───────────────────────────────────────────────────
 //  Create ONE alert with condition = "Any alert() function call".
