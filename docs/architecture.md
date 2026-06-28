@@ -43,5 +43,6 @@ retries, and kill-switches. The signal payload is *intent*, not an order.
 | Relationship | source of truth for live signals | must replicate indicator signals exactly |
 
 The strategy exists to *prove* the indicator's signal logic on historical data.
-It is not the live path. Keep their signal blocks byte-for-byte identical (ideally
-both `import` the same library so there is one implementation).
+It is not the live path. Keep their signal blocks byte-for-byte identical — copy the
+block verbatim so there is one source of truth (the canonical indicator is
+self-contained, with no library dependency).
