@@ -6,26 +6,34 @@ the live indicator actually does — not an aspiration.
 ## Core rule
 
 A BUY requires **every enabled leg bullish**; a SELL requires **every enabled leg
-bearish**. All four legs are read on confirmed bars only (`barstate.isconfirmed`).
+bearish**. All five legs are read on confirmed bars only (`barstate.isconfirmed`).
 
 ```
-buyState  = utBull  and stBull  and lrBull  and vwapBull
-sellState = utBear  and stBear  and lrBear  and vwapBear
+buyState  = utBull  and stBull  and lrBull  and vwapBull and taBull
+sellState = utBear  and stBear  and lrBear  and vwapBear and taBear
 ```
 
-`vwapBull/vwapBear` are forced `true` (neutral) when the VWAP leg is disabled, so
-turning it off cleanly collapses the system to a 3-leg confluence.
+`vwapBull/vwapBear` and `taBull/taBear` are forced `true` (neutral) when their leg
+is disabled, so turning a leg off cleanly collapses the confluence by one leg.
 
-## The four legs (with shipped defaults)
+## The five legs (with shipped defaults)
 
 | Leg | Implementation | Defaults | Bull condition |
 |-----|----------------|----------|----------------|
 | **UT Bot** | ATR recursive trailing stop | key `2.0`, ATR `1` | `close > utStop` |
-| **Supertrend** | `ta.supertrend(mult, atr)` | ATR `10`, mult `2.0` | `dir < 0` |
+| **Supertrend** | `ta.supertrend(mult, atr)` | ATR `9`, mult `3.9` | `dir < 0` |
 | **LinReg** | `ta.linreg(close, len)` vs SMA/EMA signal | reg `11`, sig `7`, SMA on | `lrClose > lrSignal` |
 | **VWAP** | manual cumulative, anchor-reset | anchor `Session`, standard polarity | `close > vwap` |
+| **Trend Cloud** | double-smoothed Heikin-Ashi MA (Dziwne A-V2.2), chart TF, manual HA | MA `EMA`, len `52`, smooth `10`, confirm `1` bar | `smoothedHA_close >= smoothedHA_open` |
 
-Extracted faithfully into `libraries/AlgoTradeOneSignals.pine` for the strategy twin.
+The Trend Cloud leg also has a **confirmation** input (`taConfirmBars`, default `1`):
+the green/red cloud must hold its colour for that many prior closed bars before the
+leg may flip the confluence — filtering single-bar cloud flicker. `0` = act on the
+flip bar.
+
+All five legs currently live **inline** in the indicator (the script is intentionally
+self-contained — no published library dependency). When the strategy twin is built,
+its leg math must be ported from the indicator so the two stay byte-identical.
 
 ## Signal behaviour — run → at most one entry
 
@@ -49,7 +57,7 @@ silent stop-and-reverse — a reversal is always exit-then-fresh-entry.
 | Exit | Default | Trigger |
 |------|---------|---------|
 | ATR trailing stop | **on** | ratcheting stop, `exitAtr 14 × 2.5`; never loosens |
-| Initial hard SL % | off (0) | caps first-bar risk: initial stop = **tighter** of ATR trail and fixed % |
+| Initial hard SL % | **0.5%** | caps first-bar risk: initial stop = **tighter** of ATR trail and fixed %. `0` = pure ATR trail |
 | Momentum reversal | off | full opposite confluence prints |
 | Supertrend flip | off | Supertrend flips against the position |
 | Intraday square-off | off | independent of `useExit`; flattens from cutoff → close (`session.islastbar_regular` backstop) |
@@ -64,6 +72,10 @@ regime/structure confirmation (ADX floor, ATR expansion, prior-N-bar structure
 break excluding the current bar, HTF EMA on the last *closed* HTF bar, min VWAP
 distance).
 
+Independently, an optional **sideways block** (`blockSideways`, default off) rejects
+entries while BOTH ADX and ATR% sit below their sideways thresholds (chop). It gates
+entries only, never exits, and is redundant with the ADX floor when that filter is on.
+
 ## Non-repaint guarantees (do not regress)
 
 - Every decision gated on `barstate.isconfirmed` (closed bar).
@@ -75,6 +87,6 @@ distance).
 ## Backtest parity
 
 `strategies/algotradeone-signal-engine.pine` (not yet built) must replicate this whole
-model — not just the legs. The legs come from `AlgoTradeOneSignals.pine`; the entry latch,
-flat-only gate, and exit engine must be ported so the historical test validates
-the live signal rather than a re-implementation.
+model — not just the legs. The five legs, the entry latch, the flat-only gate, and the
+exit engine must all be ported from the indicator so the historical test validates the
+live signal rather than a re-implementation.
