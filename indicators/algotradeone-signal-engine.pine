@@ -38,6 +38,9 @@ indicator("AlgoTradeOne Signal Engine", overlay = true, max_labels_count = 500)
 // IST is the single source of truth for all session / time-window math.
 tz = "Asia/Kolkata"
 
+// Internal version — bump on each TradingView publish; mirror in CHANGELOG.md + git tag.
+VERSION = "v1.0"
+
 // ── Inputs · Core confluence legs ───────────────────────────────────────────
 //  The four directional legs. A BUY needs every ENABLED leg bullish; a SELL
 //  needs every enabled leg bearish. All legs are read on confirmed bars only.
@@ -530,7 +533,7 @@ var table dbg = table.new(_tblPos, 2, 16, bgcolor = DASH_BG, frame_color = DASH_
 // Title bar (brand + chart interval).
 f_title(_r) =>
     table.cell(dbg, 0, _r, "ATO SIGNAL ENGINE", text_size = _tblSz, bgcolor = DASH_TITLE, text_color = color.white, text_halign = text.align_left)
-    table.cell(dbg, 1, _r, timeframe.period, text_size = _tblSz, bgcolor = DASH_TITLE, text_color = color.white, text_halign = text.align_right)
+    table.cell(dbg, 1, _r, VERSION, text_size = _tblSz, bgcolor = DASH_TITLE, text_color = color.white, text_halign = text.align_right)
 // Section divider (small muted header spanning the row).
 f_section(_r, _l) =>
     table.cell(dbg, 0, _r, _l, text_size = size.tiny, bgcolor = DASH_SECT, text_color = DASH_MUTE, text_halign = text.align_left)
