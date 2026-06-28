@@ -22,8 +22,8 @@
 //    intentionally minimal - it states WHAT happened, on WHICH symbol, WHEN and
 //    at WHAT reference price, nothing more. The server / relay owns ALL
 //    execution parameters (quantity, order type, product type, exchange routing
-//    and risk). Only LONG_ENTRY / SHORT_ENTRY / LONG_EXIT / SHORT_EXIT are
-//    actionable; TREND_CHANGE is informational (transaction_type = "NONE").
+//    and risk). Every event — LONG_ENTRY / SHORT_ENTRY / LONG_EXIT / SHORT_EXIT
+//    — is actionable.
 //
 //  QUICK SETUP
 //    1. Add to chart. Line / marker colours & visibility -> Settings > Style.
@@ -459,9 +459,6 @@ if longExit or shortExit
     trailStop := na
     lastSide  := 0
 
-// Informational only: Supertrend direction flip (NOT an order).
-trendChange = confirmed and ta.change(stDir) != 0
-
 // The trail is the operative stop only while the trailing-stop exit is armed and
 // a position is open. Gate the plot/dashboard on this so a stop that can never
 // fire (exits off, or only EOD/momentum active) is never drawn as "active".
@@ -544,15 +541,14 @@ if barstate.islast and showTable
 //  The payload is a MINIMAL signal event; the server / relay applies quantity,
 //  order type, product type, exchange routing and risk centrally.
 //  Fields:
-//    event            - LONG_ENTRY | SHORT_ENTRY | LONG_EXIT | SHORT_EXIT | TREND_CHANGE
+//    event            - LONG_ENTRY | SHORT_ENTRY | LONG_EXIT | SHORT_EXIT
 //    signal_id        - idempotency key (symbol-interval-bartime); dedupe on this
-//    transaction_type - BUY | SELL | NONE  (direction of the order to place/close)
+//    transaction_type - BUY | SELL  (direction of the order to place/close)
 //    symbol           - chart ticker (relay maps it to the broker instrument)
 //    price            - reference close for logging / slippage reconciliation
 //    interval         - chart timeframe the signal fired on
 //    time             - signal bar time, IST
-//  Actionable : LONG_ENTRY / SHORT_ENTRY / LONG_EXIT / SHORT_EXIT
-//  Info only  : TREND_CHANGE (transaction_type = "NONE" -> relay no-op)
+//  All four events are actionable (entry / exit, BUY or SELL).
 ts = str.format_time(time, "yyyy-MM-dd HH:mm", tz)
 f_payload(_event, _side) =>
     sid = syminfo.ticker + "-" + timeframe.period + "-" + str.tostring(time)
@@ -572,5 +568,3 @@ if longExit
     alert(f_payload("LONG_EXIT",    "SELL"), alert.freq_once_per_bar_close)
 if shortExit
     alert(f_payload("SHORT_EXIT",   "BUY"),  alert.freq_once_per_bar_close)
-if trendChange
-    alert(f_payload("TREND_CHANGE", "NONE"), alert.freq_once_per_bar_close)

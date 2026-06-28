@@ -1,9 +1,0 @@
-{
-  "event": "TREND_CHANGE",
-  "signal_id": "RELIANCE-5-1719226200000",
-  "transaction_type": "NONE",
-  "symbol": "RELIANCE",
-  "price": 2929.40,
-  "interval": "5",
-  "time": "2026-06-24 14:30"
-}

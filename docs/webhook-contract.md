@@ -23,9 +23,9 @@ execution parameters.
 
 | Field | Pine source | Notes |
 |-------|-------------|-------|
-| `event` | literal per branch | `LONG_ENTRY` \| `SHORT_ENTRY` \| `LONG_EXIT` \| `SHORT_EXIT` \| `TREND_CHANGE`. |
+| `event` | literal per branch | `LONG_ENTRY` \| `SHORT_ENTRY` \| `LONG_EXIT` \| `SHORT_EXIT`. |
 | `signal_id` | `ticker + "-" + timeframe.period + "-" + str.tostring(time)` | Idempotency key. The relay dedupes on this — the same bar can re-deliver. |
-| `transaction_type` | literal per branch | `BUY` \| `SELL` \| `NONE`. The order direction to place/close. |
+| `transaction_type` | literal per branch | `BUY` \| `SELL`. The order direction to place/close. |
 | `symbol` | `syminfo.ticker` | Bare chart ticker; the relay maps it to the broker instrument. |
 | `price` | `close` (`format.mintick`) | Reference close for logging / slippage reconciliation. Advisory. |
 | `interval` | `timeframe.period` | Chart timeframe the signal fired on. |
@@ -39,7 +39,6 @@ execution parameters.
 | `SHORT_ENTRY` | `SELL` | ✅ | Open short. |
 | `LONG_EXIT`   | `SELL` | ✅ | Close long. |
 | `SHORT_EXIT`  | `BUY`  | ✅ | Close short. |
-| `TREND_CHANGE`| `NONE` | ❌ | Informational only — **no-op**. Logged, never traded. |
 
 ## Relay-owned (NEVER in the payload)
 
