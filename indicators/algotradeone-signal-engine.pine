@@ -182,10 +182,11 @@ swAtrPctMax  = input.float(0.35, "Sideways if ATR% below", step = 0.05, group = 
 gD = "Display"
 showBG    = input.bool(true, "Shade confluence zones", group = gD,
      tooltip = "Background tint while a full BUY/SELL confluence is active. bgcolor() has no Style-tab control, so its colour is fixed in code.")
-showTable = input.bool(true, "Show status table", inline = "tbl", group = gD)
+showTable = input.bool(true, "Show Status Dashboard", inline = "tbl", group = gD,
+     tooltip = "Show / hide the dashboard. Pine cannot place a tap-button on the chart — for a one-tap hide use the indicator's eye (visibility) icon in the chart legend, though that hides the whole indicator, not just this table.")
 tblPos    = input.string("Top Right", "", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], inline = "tbl", group = gD,
      tooltip = "Where the status dashboard sits on the chart, and its text size. (Tables cannot be moved to the Style tab.)")
-tblSize   = input.string("Small", "", options = ["Tiny", "Small", "Normal", "Large"], inline = "tbl", group = gD)
+tblSize   = input.string("Tiny", "", options = ["Tiny", "Small", "Normal", "Large"], inline = "tbl", group = gD)
 
 // ── Calculations · Directional legs ─────────────────────────────────────────
 src = close
