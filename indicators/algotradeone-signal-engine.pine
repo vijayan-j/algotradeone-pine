@@ -327,7 +327,7 @@ eodCut = useEOD and ((session.ismarket and barMin >= sqoffStartMin) or session.i
 var int sessFirstMin = na
 var int sessLastMin  = na
 if session.isfirstbar_regular
-    sessFirstMin := hour(time, tz) * 60 + minute(time, tz)
+    sessFirstMin := barMin                              // == hour*60+minute, already computed above
 if session.islastbar_regular
     sessLastMin := hour(time_close, tz) * 60 + minute(time_close, tz)
 
