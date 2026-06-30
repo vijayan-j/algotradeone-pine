@@ -39,7 +39,7 @@ indicator("AlgoTradeOne Signal Engine", overlay = true, max_labels_count = 500)
 tz = "Asia/Kolkata"
 
 // Internal version — bump on each TradingView publish; mirror in CHANGELOG.md + git tag.
-VERSION = "v1.0"
+VERSION = "v1.1"
 
 // ── Inputs · Core confluence legs ───────────────────────────────────────────
 //  The four directional legs. A BUY needs every ENABLED leg bullish; a SELL
@@ -187,6 +187,22 @@ showTable = input.bool(true, "Show Status Dashboard", inline = "tbl", group = gD
 tblPos    = input.string("Top Right", "", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], inline = "tbl", group = gD,
      tooltip = "Where the status dashboard sits on the chart, and its text size. (Tables cannot be moved to the Style tab.)")
 tblSize   = input.string("Tiny", "", options = ["Tiny", "Small", "Normal", "Large"], inline = "tbl", group = gD)
+
+// ── Inputs · First Red Candle marker (independent — never feeds the signals) ─
+//  Purely visual aid. Marks the first red candle of each session at a user-chosen
+//  timeframe and draws its high / body-mid / low. It is fenced off from the
+//  confluence, the exit engine and the webhook — enable / disable at will.
+gFRC = "First Red Candle (marker)"
+showFRC     = input.bool(false, "Mark first red candle", group = gFRC,
+     tooltip = "Independent visual aid only — it never affects BUY/SELL signals, the exit engine, or alerts. Marks the first red candle of each session and draws its high / body-mid / low as reference lines. Intraday charts only.")
+frcTF       = input.timeframe("", "Detection timeframe", group = gFRC,
+     tooltip = "Timeframe used to find the first red candle. Empty = chart timeframe. Must be EQUAL TO or HIGHER than the chart timeframe; a lower value falls back to the chart timeframe (a config warning is shown). On a higher timeframe the mark settles once that candle CLOSES — a small, non-repainting lag.")
+frcRedDef   = input.string("Body: close < open", "Red definition", options = ["Body: close < open", "Vs prev close: close < close[1]"], group = gFRC,
+     tooltip = "Body = candle closes below its own open. Vs prev close = candle closes below the previous candle's close.")
+frcInclOpen = input.bool(true, "Include opening candle", group = gFRC,
+     tooltip = "ON = the session's opening candle is eligible to be the first red candle. OFF = skip it and look from the second candle onward.")
+frcLabel    = input.bool(false, "Show reference-candle label", group = gFRC,
+     tooltip = "Draw a small label at the marked candle showing its open / close / high / low and detection timeframe. Visual only.")
 
 // ── Calculations · Directional legs ─────────────────────────────────────────
 src = close
@@ -468,6 +484,81 @@ if longExit or shortExit
 // fire (exits off, or only EOD/momentum active) is never drawn as "active".
 trailActive = useExit and exitTrail and pos != 0 and not na(trailStop)
 
+// ── First Red Candle marker (independent; visual only) ──────────────────────
+//  Self-contained: reads nothing from the confluence / exit / alert paths and
+//  feeds nothing back. The detection timeframe is user-selectable and must be
+//  >= the chart timeframe (a lower choice falls back to the chart timeframe). On
+//  a higher timeframe the mark settles when that candle CLOSES (small, honest lag).
+frcChartSecs = timeframe.in_seconds()
+frcSelSecs   = frcTF == "" ? frcChartSecs : timeframe.in_seconds(frcTF)
+frcValidTF   = frcSelSecs >= frcChartSecs
+frcOn        = showFRC and timeframe.isintraday                       // intraday only
+frcUseHTF    = frcOn and frcValidTF and frcSelSecs > frcChartSecs
+frcEffTF     = frcUseHTF ? frcTF : timeframe.period                   // chart TF when equal / invalid
+
+// Last CLOSED candle of the detection timeframe (shifted one bar back inside the
+// request -> non-repainting, per the repo's HTF rule).
+[frcSrcO, frcSrcH, frcSrcL, frcSrcC, frcSrcPrevC, frcSrcT] = request.security(syminfo.tickerid, frcEffTF,
+     [open[1], high[1], low[1], close[1], close[2], time[1]], lookahead = barmerge.lookahead_off)
+frcSrcChanged = ta.change(frcSrcT)                                    // stateful -> evaluated every bar
+
+// Per-session state (resets at each regular-session open).
+var bool  frcFound   = false
+var float frcHigh    = na
+var float frcLow     = na
+var float frcMid     = na
+var float frcRefO    = na
+var float frcRefC    = na
+var int   frcHtfSeen = 0
+if session.isfirstbar_regular
+    frcFound   := false
+    frcHigh    := na
+    frcLow     := na
+    frcMid     := na
+    frcRefO    := na
+    frcRefC    := na
+    frcHtfSeen := 0
+
+frcMark = false
+if frcOn and not frcUseHTF
+    // Chart-timeframe path — confirmed bar, no lag (mirrors the source script).
+    frcRed  = frcRedDef == "Body: close < open" ? close < open : (not na(close[1]) and close < close[1])
+    frcSkip = not frcInclOpen and session.isfirstbar_regular
+    if barstate.isconfirmed and frcRed and not frcSkip and not frcFound
+        frcFound := true
+        frcHigh  := high
+        frcLow   := low
+        frcMid   := math.avg(open, close)
+        frcRefO  := open
+        frcRefC  := close
+        frcMark  := true
+else if frcUseHTF
+    // Higher-timeframe path — fire only when a fresh detection-TF candle (this
+    // session) has just closed.
+    frcNewBar = not na(frcSrcT) and frcSrcChanged != 0 and frcSrcT >= dayStart
+    if frcNewBar
+        frcHtfSeen += 1
+    frcRed  = frcRedDef == "Body: close < open" ? frcSrcC < frcSrcO : (not na(frcSrcPrevC) and frcSrcC < frcSrcPrevC)
+    frcSkip = not frcInclOpen and frcHtfSeen == 1
+    if frcNewBar and frcRed and not frcSkip and not frcFound
+        frcFound := true
+        frcHigh  := frcSrcH
+        frcLow   := frcSrcL
+        frcMid   := math.avg(frcSrcO, frcSrcC)
+        frcRefO  := frcSrcO
+        frcRefC  := frcSrcC
+        frcMark  := true
+
+// Optional reference-candle label at the marked candle (OHLC + detection TF).
+if frcMark and frcLabel
+    frcTxt = "First Red · " + frcEffTF + "\nO " + str.tostring(frcRefO, format.mintick) + "  C " + str.tostring(frcRefC, format.mintick) +
+       "\nH " + str.tostring(frcHigh, format.mintick) + "  L " + str.tostring(frcLow, format.mintick)
+    label.new(bar_index, frcHigh, frcTxt, style = label.style_label_down, color = color.new(color.red, 15), textcolor = color.white, size = size.small)
+
+// Config warning (folded into the banner below).
+frcWarn = showFRC and not timeframe.isintraday ? "First-red-candle marker is intraday-only — inactive on this chart timeframe." :
+   showFRC and not frcValidTF ? "First-red-candle detection timeframe is below the chart — using the chart timeframe instead." : ""
+
 // ── Plots / visuals ─────────────────────────────────────────────────────────
 //  Plots and signal markers (plotshape) are all editable in the Style tab.
 // Lines (hidden by default — enable any of them per-line in the Style tab).
@@ -477,6 +568,13 @@ plot(stBull ? stLine : na, "Supertrend Up",   color = color.green, linewidth = 2
 plot(stBear ? stLine : na, "Supertrend Down", color = color.red,   linewidth = 2, style = plot.style_linebr, display = display.none)
 plot(useVwap ? vwapValue : na, "VWAP", color = color.blue, linewidth = 2, display = display.none)
 plot(trailActive ? trailStop : na, "Active Trailing Stop", color = color.orange, linewidth = 1, style = plot.style_linebr, display = display.none)
+
+// First Red Candle — independent marker + reference lines (Style tab: colour /
+// visibility). Lines hold for the session, then reset on the next open.
+plot(showFRC and frcFound ? frcHigh : na, "First Red · High", color = color.new(color.green, 0),  linewidth = 1, style = plot.style_linebr)
+plot(showFRC and frcFound ? frcMid  : na, "First Red · Mid",  color = color.new(color.orange, 0), linewidth = 1, style = plot.style_linebr)
+plot(showFRC and frcFound ? frcLow  : na, "First Red · Low",  color = color.new(color.red, 0),    linewidth = 1, style = plot.style_linebr)
+plotshape(frcMark, title = "First Red Candle", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.tiny)
 
 // Leg 5: Trend Cloud (Heikin-Ashi). The two clouds are the ONLY Leg-5 visuals -
 // toggle their visibility and recolour them in the Style tab ("TA Open & Close
@@ -506,6 +604,8 @@ bgcolor(isSideways ? color.new(color.gray, BG_SIDEWAYS_TRANSP) : na, title = "Si
 warnMsg = sqoffWarn
 if sessWarn != ""
     warnMsg := warnMsg == "" ? sessWarn : warnMsg + "\n" + sessWarn
+if frcWarn != ""
+    warnMsg := warnMsg == "" ? frcWarn : warnMsg + "\n" + frcWarn
 if barstate.islast and warnMsg != ""
     label.new(bar_index, high, "CONFIG WARNING\n" + warnMsg, yloc = yloc.price, style = label.style_label_down,
          color = color.new(color.orange, 0), textcolor = color.white, size = size.normal)

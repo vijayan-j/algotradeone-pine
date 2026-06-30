@@ -5,6 +5,17 @@ Notable changes to the **AlgoTradeOne Signal Engine** indicator
 and a TradingView publication. The in-script `VERSION` constant must match the
 latest entry here.
 
+## v1.1 — 2026-06-30
+
+- **First Red Candle marker (new, optional, default off):** marks the first red
+  candle of each session and draws its high / body-mid / low as reference lines,
+  with an optional OHLC label. Detection timeframe is user-selectable (≥ chart
+  timeframe; a lower choice falls back to the chart timeframe with a config
+  warning). Higher-timeframe detection reads the last *closed* candle, so it is
+  non-repainting (the mark settles when that candle closes). Intraday only.
+- **Fully isolated:** purely visual — it never feeds the confluence, the exit
+  engine, or the webhook. The signal/alert contract is unchanged.
+
 ## v1.0 — 2026-06-28
 
 First versioned release.
